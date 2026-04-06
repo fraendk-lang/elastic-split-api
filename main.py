@@ -25,7 +25,18 @@ import soundfile as sf
 # ---------------------------------------------------------------------------
 
 PORT = int(os.environ.get("PORT", "8003"))
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+# Always allow both www and non-www variants
+ALLOWED_ORIGINS = []
+for o in _origins:
+    o = o.strip()
+    ALLOWED_ORIGINS.append(o)
+    if o.startswith("https://www."):
+        ALLOWED_ORIGINS.append(o.replace("https://www.", "https://"))
+    elif o.startswith("https://") and "//www." not in o and o != "*":
+        ALLOWED_ORIGINS.append(o.replace("https://", "https://www."))
+if "*" in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["*"]
 MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 MAX_DURATION_SECONDS = 600  # 10 minutes
