@@ -20,8 +20,6 @@ from fastapi.responses import StreamingResponse
 from pydub import AudioSegment
 import soundfile as sf
 
-import separator
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -103,6 +101,7 @@ def cleanup_job(job_id: str):
 
 def run_separation(job: Job):
     """Run demucs separation in a background thread."""
+    import separator
     start_time = time.time()
     try:
         job.progress = "Separating stems..."
