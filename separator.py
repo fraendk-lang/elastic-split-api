@@ -1,62 +1,74 @@
 """
 Demucs v4 wrapper for stem separation.
-All heavy imports (torch, demucs) are lazy to keep server startup fast and light.
+Uses demucs CLI (subprocess) for maximum compatibility.
 """
 
 import os
+import subprocess
+import shutil
 import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_separator = None
-
-
-def _get_separator():
-    """Lazy-load the demucs model on first use."""
-    global _separator
-    if _separator is None:
-        import demucs.api
-        logger.info("Loading htdemucs model (first request, may download ~300MB)...")
-        _separator = demucs.api.Separator(model="htdemucs", device="cpu", jobs=1)
-        logger.info("Model loaded successfully.")
-    return _separator
-
 
 def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str]:
     """
-    Run demucs separation on an audio file.
+    Run demucs separation via CLI.
     Blocking — call from a background thread.
     """
-    import torchaudio
-
     os.makedirs(output_dir, exist_ok=True)
 
-    sep = _get_separator()
-    origin, separated = sep.separate_audio_file(Path(input_path))
+    # Build demucs CLI command
+    cmd = [
+        "python", "-m", "demucs",
+        "-n", "htdemucs",
+        "--device", "cpu",
+        "-o", output_dir,
+    ]
 
     if mode == "2stems":
-        stems = list(separated.keys())
-        vocals_key = None
-        instrumental_parts = []
+        cmd.extend(["--two-stems", "vocals"])
 
-        for key in stems:
-            if key == "vocals":
-                vocals_key = key
-            else:
-                instrumental_parts.append(separated[key])
+    cmd.append(input_path)
 
-        instrumental = instrumental_parts[0]
-        for part in instrumental_parts[1:]:
-            instrumental = instrumental + part
+    logger.info(f"Running demucs: {' '.join(cmd)}")
 
-        torchaudio.save(os.path.join(output_dir, "vocals.wav"), separated[vocals_key], sample_rate=44100)
-        torchaudio.save(os.path.join(output_dir, "instrumental.wav"), instrumental, sample_rate=44100)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,  # 10 min max
+    )
 
-        return ["vocals", "instrumental"]
-    else:
-        stem_names = []
-        for stem_name, stem_audio in separated.items():
-            torchaudio.save(os.path.join(output_dir, f"{stem_name}.wav"), stem_audio, sample_rate=44100)
+    if result.returncode != 0:
+        logger.error(f"Demucs stderr: {result.stderr}")
+        raise RuntimeError(f"Demucs failed: {result.stderr[-500:]}")
+
+    logger.info(f"Demucs stdout: {result.stdout[-200:]}")
+
+    # Demucs outputs to: output_dir/htdemucs/<filename_without_ext>/
+    input_name = Path(input_path).stem
+    stems_dir = os.path.join(output_dir, "htdemucs", input_name)
+
+    if not os.path.isdir(stems_dir):
+        # Try without model subfolder
+        stems_dir = os.path.join(output_dir, input_name)
+        if not os.path.isdir(stems_dir):
+            raise RuntimeError(f"Stems output directory not found. Checked: {output_dir}")
+
+    # Move stems from nested dir to output_dir root
+    stem_names = []
+    for f in os.listdir(stems_dir):
+        if f.endswith(".wav"):
+            stem_name = f.replace(".wav", "")
+            shutil.move(os.path.join(stems_dir, f), os.path.join(output_dir, f))
             stem_names.append(stem_name)
-        return stem_names
+
+    # Clean up nested dirs
+    htdemucs_dir = os.path.join(output_dir, "htdemucs")
+    if os.path.isdir(htdemucs_dir):
+        shutil.rmtree(htdemucs_dir, ignore_errors=True)
+
+    logger.info(f"Stems produced: {stem_names}")
+    return stem_names
