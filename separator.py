@@ -1,6 +1,6 @@
 """
 Demucs v4 wrapper for stem separation.
-Pre-loads the htdemucs model at import time to avoid cold-start on first request.
+Lazy-loads the htdemucs model on first request to avoid blocking server startup.
 """
 
 import os
@@ -8,14 +8,21 @@ import logging
 from pathlib import Path
 
 import torchaudio
-import demucs.api
 
 logger = logging.getLogger(__name__)
 
-# Pre-load model at startup (downloads ~300MB on first run)
-logger.info("Loading htdemucs model...")
-_separator = demucs.api.Separator(model="htdemucs", device="cpu", jobs=4)
-logger.info("Model loaded successfully.")
+_separator = None
+
+
+def _get_separator():
+    """Lazy-load the demucs model on first use."""
+    global _separator
+    if _separator is None:
+        import demucs.api
+        logger.info("Loading htdemucs model (first request, may download ~300MB)...")
+        _separator = demucs.api.Separator(model="htdemucs", device="cpu", jobs=2)
+        logger.info("Model loaded successfully.")
+    return _separator
 
 
 def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str]:
@@ -33,8 +40,10 @@ def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    sep = _get_separator()
+
     # Always run full 4-stem separation
-    origin, separated = _separator.separate_audio_file(Path(input_path))
+    origin, separated = sep.separate_audio_file(Path(input_path))
 
     if mode == "2stems":
         # Merge drums + bass + other into "instrumental"
