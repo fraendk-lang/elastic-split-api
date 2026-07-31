@@ -39,8 +39,8 @@ if "*" in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS = ["*"]
 MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "150"))
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
-MAX_DURATION_SECONDS = 600  # 10 minutes
-JOB_TTL_MINUTES = int(os.environ.get("JOB_TTL_MINUTES", "30"))
+MAX_DURATION_SECONDS = int(os.environ.get("MAX_DURATION_SECONDS", "600"))  # 10 minutes
+JOB_TTL_MINUTES = int(os.environ.get("JOB_TTL_MINUTES", "60"))
 TMP_DIR = "/tmp/elastic-split-jobs"
 
 VALID_FORMATS = {".wav", ".mp3", ".flac", ".ogg"}
@@ -76,6 +76,7 @@ class Job:
     output_dir: str = ""
     created_at: float = field(default_factory=time.time)
     duration: float = 0.0
+    audio_duration: float = 0.0
     error: Optional[str] = None
     mode: str = "4stems"
 
@@ -115,8 +116,15 @@ def run_separation(job: Job):
     import separator
     start_time = time.time()
     try:
-        job.progress = "Separating stems..."
-        stem_names = separator.separate(job.input_path, job.output_dir, job.mode)
+        job.progress = "Separating stems (CPU — large files can take 15–30 min)..."
+        timeout = separator.separation_timeout(job.audio_duration)
+        stem_names = separator.separate(
+            job.input_path,
+            job.output_dir,
+            job.mode,
+            timeout=timeout,
+            audio_duration_seconds=job.audio_duration,
+        )
         job.stems = stem_names
         job.duration = time.time() - start_time
         job.status = "completed"
@@ -187,11 +195,14 @@ async def split(
         f.write(contents)
 
     # Check duration
-    duration = get_audio_duration(input_path)
-    if duration > MAX_DURATION_SECONDS:
+    audio_duration = get_audio_duration(input_path)
+    if audio_duration > MAX_DURATION_SECONDS:
         processing_lock.release()
         shutil.rmtree(job_dir, ignore_errors=True)
-        raise HTTPException(400, f"Audio too long ({duration:.0f}s). Maximum is 10 minutes.")
+        raise HTTPException(
+            400,
+            f"Audio too long ({audio_duration:.0f}s). Maximum is {MAX_DURATION_SECONDS // 60} minutes.",
+        )
 
     # Create job entry
     job = Job(
@@ -199,6 +210,7 @@ async def split(
         input_path=input_path,
         output_dir=output_dir,
         mode=mode,
+        audio_duration=audio_duration,
         progress="Starting separation...",
     )
     jobs[job_id] = job

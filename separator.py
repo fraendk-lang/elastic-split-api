@@ -11,8 +11,28 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("DEMUCS_TIMEOUT_SECONDS", "3600"))
+DEMUCS_DEVICE = os.environ.get("DEMUCS_DEVICE", "cpu")
+DEMUCS_JOBS = int(os.environ.get("DEMUCS_JOBS", "2"))
+DEMUCS_SHIFTS = os.environ.get("DEMUCS_SHIFTS", "1")
+# CPU separation often needs ~30–60× realtime; scale timeout with track length.
+DEMUCS_CPU_REALTIME_FACTOR = float(os.environ.get("DEMUCS_CPU_REALTIME_FACTOR", "60"))
 
-def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str]:
+
+def separation_timeout(audio_duration_seconds: float) -> int:
+    """Minimum 1h, or 60× song length — whichever is larger."""
+    scaled = int(max(audio_duration_seconds, 1) * DEMUCS_CPU_REALTIME_FACTOR)
+    return max(DEFAULT_TIMEOUT_SECONDS, scaled)
+
+
+def separate(
+    input_path: str,
+    output_dir: str,
+    mode: str = "4stems",
+    *,
+    timeout: int | None = None,
+    audio_duration_seconds: float = 0,
+) -> list[str]:
     """
     Run demucs separation via CLI.
     Blocking — call from a background thread.
@@ -23,7 +43,9 @@ def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str
     cmd = [
         "python", "-m", "demucs",
         "-n", "htdemucs",
-        "--device", "cpu",
+        "--device", DEMUCS_DEVICE,
+        "-j", str(DEMUCS_JOBS),
+        "--shifts", DEMUCS_SHIFTS,
         "-o", output_dir,
     ]
 
@@ -32,14 +54,22 @@ def separate(input_path: str, output_dir: str, mode: str = "4stems") -> list[str
 
     cmd.append(input_path)
 
-    logger.info(f"Running demucs: {' '.join(cmd)}")
+    run_timeout = timeout if timeout is not None else separation_timeout(audio_duration_seconds)
+    logger.info(f"Running demucs (timeout={run_timeout}s): {' '.join(cmd)}")
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=600,  # 10 min max
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=run_timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        mins = run_timeout // 60
+        raise RuntimeError(
+            f"Separation timed out after {mins} minutes. "
+            "Try a shorter clip or 2-stem mode (vocals/instrumental)."
+        ) from e
 
     if result.returncode != 0:
         logger.error(f"Demucs stderr: {result.stderr}")
