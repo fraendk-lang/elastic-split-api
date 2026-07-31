@@ -115,8 +115,19 @@ def run_separation(job: Job):
     """Run demucs separation in a background thread."""
     import separator
     start_time = time.time()
+    stop_progress = threading.Event()
+
+    def progress_heartbeat():
+        while not stop_progress.wait(15):
+            elapsed = int(time.time() - start_time)
+            mins, secs = divmod(elapsed, 60)
+            job.progress = f"Separating on CPU… {mins}:{secs:02d} elapsed (can take 15–30 min)"
+
+    heartbeat = threading.Thread(target=progress_heartbeat, daemon=True)
+    heartbeat.start()
+
     try:
-        job.progress = "Separating stems (CPU — large files can take 15–30 min)..."
+        job.progress = "Starting Demucs separation…"
         timeout = separator.separation_timeout(job.audio_duration)
         stem_names = separator.separate(
             job.input_path,
@@ -135,6 +146,7 @@ def run_separation(job: Job):
         job.error = str(e)
         logger.error(f"Job {job.job_id} failed: {e}")
     finally:
+        stop_progress.set()
         processing_lock.release()
         # Schedule cleanup
         timer = threading.Timer(JOB_TTL_MINUTES * 60, cleanup_job, args=[job.job_id])
