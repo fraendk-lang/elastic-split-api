@@ -37,7 +37,7 @@ for o in _origins:
         ALLOWED_ORIGINS.append(o.replace("https://", "https://www."))
 if "*" in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS = ["*"]
-MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
+MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "150"))
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 MAX_DURATION_SECONDS = 600  # 10 minutes
 JOB_TTL_MINUTES = int(os.environ.get("JOB_TTL_MINUTES", "30"))
